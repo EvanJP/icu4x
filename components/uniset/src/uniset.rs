@@ -1,4 +1,4 @@
-use std::{char, convert::TryFrom, ops::RangeBounds, slice::Iter};
+use std::{char, convert::TryFrom, ops::RangeBounds, slice::Chunks};
 
 use super::USetError;
 use crate::utils::{deconstruct_range, is_valid};
@@ -65,8 +65,8 @@ impl UnicodeSet {
     /// assert_eq!(Some(&20), example_ranges.next());     
     /// assert_eq!(None, example_ranges.next());
     /// ```
-    pub fn ranges(&self) -> Iter<u32> {
-        self.inv_list.iter()
+    fn ranges(&self) -> Chunks<u32> {
+        self.inv_list.chunks(2)
     }
 
     /// Yields an iterator going through the character set in the UnicodeSet
@@ -86,8 +86,7 @@ impl UnicodeSet {
     /// assert_eq!(None, example_iter.next());
     /// ```
     pub fn iter(&self) -> impl Iterator<Item = char> + '_ {
-        self.inv_list
-            .chunks(2)
+        self.ranges()
             .flat_map(|pair| (pair[0]..pair[1]))
             .filter_map(char::from_u32)
     }
@@ -190,6 +189,46 @@ impl UnicodeSet {
         match self.contains_query(from) {
             Some(pos) => (till) <= self.inv_list[pos + 1],
             None => false,
+        }
+    }
+
+    /// Check if the UnicodeSet parameter is entirely in the calling UnicodeSet
+    ///
+    /// where U is the UnicodeSet calling the function and S is the
+    /// UnicodeSet in the argument position  
+    ///     Since we know S < U, for S ranges we need to call log_2(U) for O(Slog_2(U))
+    ///     If we decide a linear time, it becomes O(U)
+    ///     If S <<<< U then O(U) > O(Slog_2(U))
+    ///     If S <= U then O(U) < O(Slog_2(U))
+    pub fn contains_set(&self, set: &UnicodeSet) -> bool {
+        if set.size() > self.size() {
+            return false;
+        }
+        let s = set.size() as f32;
+        let u = self.size() as f32;
+        if s * u.log2() < u {
+            set.ranges().all(|range| {
+                self.contains_range(
+                    &(char::from_u32(range[0]).unwrap()..char::from_u32(range[1]).unwrap()),
+                )
+            })
+        } else {
+            let mut set_ranges: Chunks<u32> = set.ranges();
+            let mut check = set_ranges.next();
+            for range in self.ranges() {
+                match check {
+                    Some(r) => {
+                        if r[0] >= range[0] && r[1] <= range[1] {
+                            check = set_ranges.next();
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            match set_ranges.next() {
+                Some(_) => false,
+                None => true,
+            }
         }
     }
 }
